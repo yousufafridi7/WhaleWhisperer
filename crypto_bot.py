@@ -245,6 +245,8 @@ def parse_ai_response(text, ai_name):
     else:
         reasoning = "No reasoning provided."
 
+    unavailable = (confidence == 0 and reasoning == "No reasoning provided.") or text.startswith("Error:")
+
     return {
         "ai": ai_name,
         "decision": decision,
@@ -254,7 +256,8 @@ def parse_ai_response(text, ai_name):
         "sl": float(sl) if sl.replace(".", "").isdigit() else 0.0,
         "tp1": float(tp1) if tp1.replace(".", "").isdigit() else 0.0,
         "tp2": float(tp2) if tp2.replace(".", "").isdigit() else 0.0,
-        "raw": reasoning
+        "raw": reasoning,
+        "unavailable": unavailable
     }
 
 def generate_prompt(data):
@@ -290,7 +293,7 @@ REASONING: [1 sentence of reasoning]
 def print_separator():
     print("═══════════════════════════════════════")
 
-def run_bot(symbol_input):
+def run_bot(symbol_input, balance):
     fetcher = CryptoDataFetcher(symbol_input)
     print(f"\nFetching data for {fetcher.symbol}...")
     
@@ -331,22 +334,22 @@ def run_bot(symbol_input):
     
     # Voting System
     ai_results = [gemini_res, deepseek_res, groq_res]
-    decisions = [r['decision'] for r in ai_results]
+    active_results = [r for r in ai_results if not r.get('unavailable')]
+    decisions = [r['decision'] for r in active_results]
     longs = decisions.count("LONG")
     shorts = decisions.count("SHORT")
     waits = decisions.count("WAIT")
     
     final_decision = "WAIT ❌"
-    if longs == 3: final_decision = "LONG ✅✅✅"
-    elif longs == 2: final_decision = "LONG ✅✅"
-    elif longs == 1 and shorts == 0: final_decision = "LONG ⚠️"
-    elif shorts == 3: final_decision = "SHORT ✅✅✅"
-    elif shorts == 2: final_decision = "SHORT ✅✅"
-    elif shorts == 1 and longs == 0: final_decision = "SHORT ⚠️"
+    if active_results:
+        if longs == len(active_results) and longs > 0: final_decision = f"LONG {'✅'*longs}"
+        elif longs > shorts and longs >= waits: final_decision = f"LONG {'✅'*longs}"
+        elif shorts == len(active_results) and shorts > 0: final_decision = f"SHORT {'✅'*shorts}"
+        elif shorts > longs and shorts >= waits: final_decision = f"SHORT {'✅'*shorts}"
     
-    avg_conf = int(sum(r['confidence'] for r in ai_results) / 3)
+    avg_conf = int(sum(r['confidence'] for r in active_results) / len(active_results)) if active_results else 0
     
-    agreeing_ais = [r for r in ai_results if r['decision'] in final_decision]
+    agreeing_ais = [r for r in active_results if r['decision'] in final_decision]
     risk_level = max(agreeing_ais, key=lambda x: x['confidence'])['risk'] if agreeing_ais else "MEDIUM"
     
     warnings = []
@@ -377,6 +380,7 @@ def run_bot(symbol_input):
     print("  🤖 AI VOTES")
     
     def format_vote(res):
+        if res.get('unavailable'): return "Unavailable ❌"
         icon = "✅" if res['decision'] in final_decision and res['decision'] != "WAIT" else ("⚠️" if res['decision'] == "WAIT" else "❌")
         return f"{res['decision']:<5} {res['confidence']}%  {icon}"
         
@@ -414,12 +418,57 @@ def run_bot(symbol_input):
         print(f"  TARGET 1:  ${tp1_price:,.2f}  🟢")
         print(f"  TARGET 2:  ${tp2_price:,.2f}  🟢")
         print(f"  R/R RATIO: 1:{rr_ratio:.1f}")
+        
+        if "LONG" in final_decision:
+            m15_match = "Bullish" in tf_15m
+            h1_match = "Bullish" in tf_1h
+            h4_match = "Bullish" in tf_4h
+        else:
+            m15_match = "Bearish" in tf_15m
+            h1_match = "Bearish" in tf_1h
+            h4_match = "Bearish" in tf_4h
+            
+        if m15_match and h1_match and h4_match: duration = "1hr — 4hrs (Strong Intraday)"
+        elif h4_match: duration = "8hrs — 24hrs (Swing)"
+        elif h1_match: duration = "2hrs — 8hrs (Intraday)"
+        elif m15_match: duration = "30min — 2hrs (Scalp)"
+        else: duration = "Unclear — monitor closely ⚠️"
+        print(f"  ⏱ EST. DURATION: {duration}")
+        print("───────────────────────────────────")
+        
+        print(f"  ⚡ LEVERAGE GUIDE  (Balance: ${balance:,.0f})")
+        print()
+        print("  Lev  │ Liq Price │ Loss if SL  │ Profit TP1  │ Profit TP2  │ Risk")
+        print("  ─────┼───────────┼─────────────┼─────────────┼─────────────┼──────────")
+        
+        for lev in [3, 5, 10, 15, 20, 25, 30]:
+            liq = entry_price - (entry_price / lev) if "LONG" in final_decision else entry_price + (entry_price / lev)
+            loss_val = (risk_dist / entry_price) * lev * balance
+            tp1_val = (reward_dist / entry_price) * lev * balance
+            tp2_val = (abs(tp2_price - entry_price) / entry_price) * lev * balance
+            loss_pct = (loss_val / balance) * 100
+            
+            if loss_pct < 10: risk_str = "🟢 Safe"
+            elif loss_pct <= 20: risk_str = "🟡 Low"
+            elif loss_pct <= 35: risk_str = "🟠 Medium"
+            elif loss_pct <= 50: risk_str = "🔴 High"
+            else: risk_str = "💀 Danger"
+            
+            print(f"  {lev}x".ljust(7) + f"│ ${liq:,.0f}".ljust(12) + f"│ -${loss_val:,.0f} ({loss_pct:.0f}%)".ljust(14) + f"│ +${tp1_val:,.0f}".ljust(14) + f"│ +${tp2_val:,.0f}".ljust(14) + f"│ {risk_str}")
+        
+        print()
+        if len(active_results) >= 2 and max(longs, shorts) >= 3 and vol_confirm: sug = "10x — 15x"
+        elif len(active_results) >= 2 and max(longs, shorts) >= 2 and vol_confirm: sug = "5x — 10x"
+        elif len(active_results) >= 2 and max(longs, shorts) >= 2 and not vol_confirm: sug = "3x — 5x"
+        elif avg_conf < 50: sug = "3x max"
+        else: sug = "3x — 5x"
+        print(f"  💡 SUGGESTED: {sug} (Final decision is yours)")
         print("───────────────────────────────────")
         
     print("  💬 WHY?")
-    print(f"  Gemini:   {gemini_res['raw']}")
-    print(f"  DeepSeek: {deepseek_res['raw']}")
-    print(f"  Groq:     {groq_res['raw']}")
+    print(f"  Gemini:   {gemini_res['raw'] if not gemini_res.get('unavailable') else 'Unavailable ❌'}")
+    print(f"  DeepSeek: {deepseek_res['raw'] if not deepseek_res.get('unavailable') else 'Unavailable ❌'}")
+    print(f"  Groq:     {groq_res['raw'] if not groq_res.get('unavailable') else 'Unavailable ❌'}")
     print("═══════════════════════════════════")
     
     if warnings:
@@ -430,11 +479,15 @@ def run_bot(symbol_input):
     print(f"  💡 SUMMARY: {max(longs, shorts)}/3 AIs say {'LONG' if longs > shorts else ('SHORT' if shorts > longs else 'WAIT')}.")
 
 if __name__ == "__main__":
+    balance_str = input("💰 Enter your account balance (USDT): ")
+    try: balance = float(balance_str)
+    except: balance = 500.0
+
     while True:
-        pair = input("Enter a crypto pair (e.g. BTC/USDT) or 'exit': ")
+        pair = input("\nEnter a crypto pair (e.g. BTC/USDT) or 'exit': ")
         if pair.lower() == 'exit':
             break
-        run_bot(pair)
+        run_bot(pair, balance)
         
         again = input("\nAnalyze another coin? (yes/no): ")
         if again.lower() != 'yes':
