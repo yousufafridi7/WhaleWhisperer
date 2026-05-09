@@ -1,14 +1,11 @@
 import os
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import re
 import time
 import requests
 import pandas as pd
-import pandas_ta as ta
 from dotenv import load_dotenv
-
-# Optional: suppress warnings for pandas-ta
-import warnings
-warnings.filterwarnings("ignore")
 
 load_dotenv()
 
@@ -18,8 +15,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 class CryptoDataFetcher:
     def __init__(self, symbol):
-        self.raw_symbol = symbol.upper()
-        self.symbol = symbol.replace("/", "").upper()
+        self.raw_symbol = symbol.upper().strip()
+        self.symbol = self.raw_symbol.replace("/", "").replace("-", "")
+        if not self.symbol.endswith("USDT") and not self.symbol.endswith("BUSD") and not self.symbol.endswith("USDC"):
+            self.symbol += "USDT"
         self.base_url_spot = "https://api.binance.com/api/v3"
         self.base_url_fapi = "https://fapi.binance.com/fapi/v1"
         self.base_url_fdata = "https://fapi.binance.com/futures/data"
@@ -37,11 +36,29 @@ class CryptoDataFetcher:
             for col in ["open", "high", "low", "close", "volume"]:
                 df[col] = pd.to_numeric(df[col])
             
-            # Indicators
-            df.ta.rsi(length=14, append=True)
-            df.ta.macd(fast=12, slow=26, signal=9, append=True)
-            df.ta.bbands(length=20, std=2, append=True)
-            df.ta.sma(length=20, close="volume", append=True, prefix="VOL")
+            # Indicators (Pure Pandas)
+            # RSI
+            delta = df["close"].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df["RSI"] = 100 - (100 / (1 + rs))
+            
+            # MACD
+            exp1 = df["close"].ewm(span=12, adjust=False).mean()
+            exp2 = df["close"].ewm(span=26, adjust=False).mean()
+            df["MACD"] = exp1 - exp2
+            df["MACD_signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+            df["MACDh"] = df["MACD"] - df["MACD_signal"]
+            
+            # Bollinger Bands
+            df["BBM"] = df["close"].rolling(window=20).mean()
+            df["BBSD"] = df["close"].rolling(window=20).std()
+            df["BBU"] = df["BBM"] + (df["BBSD"] * 2)
+            df["BBL"] = df["BBM"] - (df["BBSD"] * 2)
+            
+            # Volume SMA
+            df["VOL_SMA_20"] = df["volume"].rolling(window=20).mean()
             return df
         except Exception as e:
             return None
@@ -51,11 +68,11 @@ class CryptoDataFetcher:
         if df is None or len(df) < 20: 
             return "Neutral", False, {}, 0
         
-        last_rsi = df["RSI_14"].iloc[-1]
-        last_macd = df["MACD_12_26_9"].iloc[-1]
-        last_macdh = df["MACDh_12_26_9"].iloc[-1] # histogram
+        last_rsi = df["RSI"].iloc[-1]
+        last_macd = df["MACD"].iloc[-1]
+        last_macdh = df["MACDh"].iloc[-1] # histogram
         last_close = df["close"].iloc[-1]
-        last_sma = df["BBM_20_2.0"].iloc[-1]
+        last_sma = df["BBM"].iloc[-1]
         
         last_vol = df["volume"].iloc[-1]
         avg_vol = df["VOL_SMA_20"].iloc[-1]
@@ -70,8 +87,8 @@ class CryptoDataFetcher:
         indicators = {
             "RSI": round(last_rsi, 2),
             "MACD": round(last_macd, 2),
-            "BB_Upper": round(df["BBU_20_2.0"].iloc[-1], 2),
-            "BB_Lower": round(df["BBL_20_2.0"].iloc[-1], 2)
+            "BB_Upper": round(df["BBU"].iloc[-1], 2),
+            "BB_Lower": round(df["BBL"].iloc[-1], 2)
         }
             
         return trend, vol_confirming, indicators, last_close
@@ -181,7 +198,10 @@ def get_deepseek_analysis(prompt):
         headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": "deepseek-chat",
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": "You are a trading bot. You MUST reply ONLY with the exact format requested. No pleasantries."},
+                {"role": "user", "content": prompt}
+            ],
             "stream": False
         }
         response = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload).json()
@@ -218,7 +238,12 @@ def parse_ai_response(text, ai_name):
     tp2 = extract(r"TP2:\s*([\d\.,]+)", "0").replace(",", "")
     
     reasoning_match = re.search(r"REASONING:\s*(.*)", text, re.IGNORECASE | re.DOTALL)
-    reasoning = reasoning_match.group(1).strip().replace("\\n", " ")[:200] if reasoning_match else "No reasoning provided."
+    if reasoning_match:
+        reasoning_raw = reasoning_match.group(1).strip().replace("\n", " ")
+        sentences = re.split(r'(?<=[.!?])\s+', reasoning_raw)
+        reasoning = sentences[0] if sentences else reasoning_raw
+    else:
+        reasoning = "No reasoning provided."
 
     return {
         "ai": ai_name,
@@ -259,7 +284,7 @@ ENTRY: [Price]
 SL: [Price]
 TP1: [Price]
 TP2: [Price]
-REASONING: [2-3 lines of reasoning]
+REASONING: [1 sentence of reasoning]
 """
 
 def print_separator():
@@ -321,75 +346,88 @@ def run_bot(symbol_input):
     
     avg_conf = int(sum(r['confidence'] for r in ai_results) / 3)
     
-    # Best setup extraction based on final decision
-    best_setup = None
     agreeing_ais = [r for r in ai_results if r['decision'] in final_decision]
-    if agreeing_ais:
-        best_setup = max(agreeing_ais, key=lambda x: x['confidence'])
+    risk_level = max(agreeing_ais, key=lambda x: x['confidence'])['risk'] if agreeing_ais else "MEDIUM"
     
-    # Terminal Output
-    print()
-    print_separator()
-    print(f"COIN: {fetcher.symbol} | Price: ${price:,.2f}")
-    print_separator()
-    print(f"TIMEFRAMES:  15m: {tf_15m} | 1hr: {tf_1h} | 4hr: {tf_4h}")
-    print_separator()
-    for w in whales: print(w)
-    print(f"💰 FUNDING RATE: {funding:+.4f}%")
-    print(f"📊 OPEN INTEREST: {oi_trend} (Total: {oi_current:,.0f})")
-    print(f"⚖️  LONG/SHORT RATIO: {l_ratio*100:.0f}% Long / {s_ratio*100:.0f}% Short")
-    print(f"😱 MARKET SENTIMENT: {fg_desc} ({fg_val}/100)")
-    print(f"📦 VOLUME: {'Confirming ✅' if vol_confirm else 'Not Confirming ⚠️'}")
-    print(f"💥 EST. LIQUIDATIONS: {liq_levels['lower']} | {liq_levels['upper']}")
-    print_separator()
-    print("AI DECISIONS:")
-    print(f"GEMINI:    {gemini_res['decision']:<5} | {gemini_res['confidence']}% confidence")
-    print(f"DEEPSEEK:  {deepseek_res['decision']:<5} | {deepseek_res['confidence']}% confidence")
-    print(f"GROQ:      {groq_res['decision']:<5} | {groq_res['confidence']}% confidence")
-    print_separator()
-    print(f"FINAL DECISION: {final_decision}")
-    print(f"OVERALL CONFIDENCE: {avg_conf}%")
-    
-    if best_setup and best_setup['decision'] != "WAIT" and best_setup['entry'] > 0:
-        print(f"RISK LEVEL: {best_setup['risk']}")
-        print("───────────────────────────────────────")
-        print(f"ENTRY:      ${best_setup['entry']:,.2f}")
-        print(f"STOP LOSS:  ${best_setup['sl']:,.2f}")
-        print(f"TARGET 1:   ${best_setup['tp1']:,.2f}")
-        print(f"TARGET 2:   ${best_setup['tp2']:,.2f}")
-        
-        # Risk/Reward Ratio Calculation
-        risk = abs(best_setup['entry'] - best_setup['sl'])
-        reward = abs(best_setup['tp1'] - best_setup['entry'])
-        if risk > 0:
-            print(f"RISK/REWARD RATIO: 1:{reward/risk:.1f}")
-        print("───────────────────────────────────────")
-        
-    print("REASONING:")
-    print(f"Gemini: {gemini_res['raw']}")
-    print(f"DeepSeek: {deepseek_res['raw']}")
-    print(f"Groq: {groq_res['raw']}")
-    print_separator()
-    
-    # Smart Warnings
     warnings = []
+    if not vol_confirm: warnings.append("Volume not confirming move")
+    if l_ratio > s_ratio and "LONG" not in final_decision: warnings.append("More longs than shorts — squeeze risk")
+    elif s_ratio > l_ratio and "SHORT" not in final_decision: warnings.append("More shorts than longs — squeeze risk")
     if funding > 0.05: warnings.append("High positive funding rate — overleveraged longs.")
     elif funding < -0.05: warnings.append("High negative funding rate — overleveraged shorts.")
-    if l_ratio > 0.7: warnings.append("Extreme Long Ratio (above 70%) — squeeze risk.")
-    elif s_ratio > 0.7: warnings.append("Extreme Short Ratio (above 70%) — squeeze risk.")
     if fg_val > 85: warnings.append("Extreme Greed (above 85) — market may be toppy.")
     elif fg_val < 15: warnings.append("Extreme Fear (below 15) — potential bounce area.")
-    if not vol_confirm and ("LONG" in final_decision or "SHORT" in final_decision):
-        warnings.append("Volume is not confirming the price move.")
-    if ("LONG" in final_decision and whale_trend == "Sell") or ("SHORT" in final_decision and whale_trend == "Buy"):
-        warnings.append("Whale activity contradicts AI decision.")
-    if "Dropping" in oi_trend and "LONG" in final_decision:
-        warnings.append("Open interest is dropping while price is rising (weakness).")
+    if ("LONG" in final_decision and whale_trend == "Sell") or ("SHORT" in final_decision and whale_trend == "Buy"): warnings.append("Whale activity contradicts AI decision.")
+    if "Dropping" in oi_trend and "LONG" in final_decision: warnings.append("Open interest dropping while price rising (weakness).")
+
+    print()
+    print("═══════════════════════════════════")
+    print(f"  🐋 WHALEWHISPERER — {fetcher.symbol}")
+    print(f"  Price: ${price:,.0f} | Risk: {risk_level}")
+    print("═══════════════════════════════════")
+    print("  📊 TREND")
+    print(f"  15m: {tf_15m} | 1hr: {tf_1h} | 4hr: {tf_4h}")
+    print()
+    print(f"  🐋 WHALES: {whale_trend}")
+    print(f"  😱 SENTIMENT: {fg_desc} ({fg_val}/100)")
+    print(f"  💰 FUNDING: {funding:+.4f}%")
+    print(f"  📦 VOLUME: {'Confirming ✅' if vol_confirm else 'Not Confirming ⚠️'}")
+    print(f"  ⚖️ LONGS vs SHORTS: {l_ratio*100:.0f}% / {s_ratio*100:.0f}%")
+    print("═══════════════════════════════════")
+    print("  🤖 AI VOTES")
+    
+    def format_vote(res):
+        icon = "✅" if res['decision'] in final_decision and res['decision'] != "WAIT" else ("⚠️" if res['decision'] == "WAIT" else "❌")
+        return f"{res['decision']:<5} {res['confidence']}%  {icon}"
+        
+    print(f"  Gemini:   {format_vote(gemini_res)}")
+    print(f"  DeepSeek: {format_vote(deepseek_res)}")
+    print(f"  Groq:     {format_vote(groq_res)}")
+    print("═══════════════════════════════════")
+    print(f"  📢 FINAL: {final_decision}")
+    print(f"  Confidence: {avg_conf}%")
+    
+    if "WAIT" in final_decision and longs == 0 and shorts == 0:
+        print("───────────────────────────────────")
+        print("  🚫 NO TRADE — All AIs suggest waiting. Come back later.")
+        print("═══════════════════════════════════")
+        return
+        
+    if "LONG" in final_decision or "SHORT" in final_decision:
+        print("───────────────────────────────────")
+        entry_price = price
+        if "LONG" in final_decision:
+            sl_price = min(price * 0.98, ind_15m.get('BB_Lower', price * 0.95))
+            tp1_price = price * 1.02
+            tp2_price = price * 1.04
+        else:
+            sl_price = max(price * 1.02, ind_15m.get('BB_Upper', price * 1.05))
+            tp1_price = price * 0.98
+            tp2_price = price * 0.96
+            
+        risk_dist = abs(entry_price - sl_price)
+        reward_dist = abs(tp1_price - entry_price)
+        rr_ratio = reward_dist / risk_dist if risk_dist > 0 else 0
+        
+        print(f"  ENTRY:     ${entry_price:,.2f}")
+        print(f"  STOP LOSS: ${sl_price:,.2f}  🔴")
+        print(f"  TARGET 1:  ${tp1_price:,.2f}  🟢")
+        print(f"  TARGET 2:  ${tp2_price:,.2f}  🟢")
+        print(f"  R/R RATIO: 1:{rr_ratio:.1f}")
+        print("───────────────────────────────────")
+        
+    print("  💬 WHY?")
+    print(f"  Gemini:   {gemini_res['raw']}")
+    print(f"  DeepSeek: {deepseek_res['raw']}")
+    print(f"  Groq:     {groq_res['raw']}")
+    print("═══════════════════════════════════")
     
     if warnings:
-        print("⚠️  WARNING: Conflicting signals detected")
-        for w in warnings: print(f"    - {w}")
-        print_separator()
+        print("  ⚠️ WARNINGS")
+        for w in warnings: print(f"  - {w}")
+        print("═══════════════════════════════════")
+        
+    print(f"  💡 SUMMARY: {max(longs, shorts)}/3 AIs say {'LONG' if longs > shorts else ('SHORT' if shorts > longs else 'WAIT')}.")
 
 if __name__ == "__main__":
     while True:
@@ -398,7 +436,7 @@ if __name__ == "__main__":
             break
         run_bot(pair)
         
-        again = input("\\nAnalyze another coin? (yes/no): ")
+        again = input("\nAnalyze another coin? (yes/no): ")
         if again.lower() != 'yes':
-            print("Exiting...")
+            print("Happy trading! 🐋")
             break
