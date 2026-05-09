@@ -11,13 +11,13 @@ No subscriptions. No cloud. Just you, your terminal, and three AIs whispering in
 ## 🧠 How It Works
 
 ```
-You type a coin → Bot fetches live data → 3 AIs analyze simultaneously
-        ↓
-Gemini says LONG | DeepSeek says LONG | Groq says WAIT
-        ↓
-Majority Vote → LONG ✅✅ | Confidence: 73% | Risk: MEDIUM
-        ↓
-Entry, Stop Loss, Take Profit — all calculated for you
+Enter balance once → Type a coin → Bot fetches live data → 3 AIs analyze simultaneously
+                                            ↓
+                        Gemini says SHORT | DeepSeek says SHORT | Groq says WAIT
+                                            ↓
+                     Majority Vote → SHORT ✅✅ | Confidence: 70% | Risk: MEDIUM
+                                            ↓
+              Entry, Stop Loss, Take Profit, Leverage Guide — all calculated for you
 ```
 
 ---
@@ -27,19 +27,21 @@ Entry, Stop Loss, Take Profit — all calculated for you
 **Multi-AI Ensemble Voting**
 - Gemini, DeepSeek, and Groq analyze the same data independently
 - Majority voting system — 2/3 or 3/3 agreement required for a signal
-- Each AI gives its own confidence score and reasoning
+- Each AI gives its own confidence score and 1-sentence reasoning
+- If one AI is unavailable, confidence is calculated from remaining AIs only
 
 **Real-Time Market Data (No Login Required)**
 - Live price from Binance public API
 - RSI, MACD, Bollinger Bands calculated in real-time
 - Multi-timeframe analysis — 15m, 1hr, and 4hr simultaneously
 - Volume confirmation check
+- Coin name auto-normalization — type `btc` or `BTC/USDT`, bot handles it
 
 **🐋 Whale Activity Detection**
 - Scans Binance order book for large buy/sell walls
 - Flags individual trades above $500,000
 - Detects if whales are accumulating or distributing
-- Whale data is fed directly into AI prompts for smarter decisions
+- Whale data fed directly into AI prompts for smarter decisions
 
 **Futures-Specific Data**
 - Funding rate — know if the market is overleveraged
@@ -47,11 +49,22 @@ Entry, Stop Loss, Take Profit — all calculated for you
 - Long/Short ratio — spot potential squeeze setups
 - Estimated liquidation levels
 
+**⏱ Estimated Trade Duration**
+- Bot estimates how long the trade will run based on timeframe signals
+- Scalp (15m signal) / Intraday (1hr) / Swing (4hr) / Conflict warning
+
+**⚡ Leverage Risk Guide**
+- Enter your account balance once at startup
+- Bot shows a full leverage table: 3x to 30x
+- Each row shows liquidation price, loss if SL hit, profit if TP1 hit, profit if TP2 hit
+- Risk level per leverage: Safe / Low / Medium / High / Extreme / Danger
+- Bot suggests a leverage range — final decision is always yours
+
 **Smart Warning System**
-- Alerts you when signals conflict with whale activity
+- Alerts when signals conflict with whale activity
 - Warns on extreme Fear & Greed readings
 - Flags when volume does not confirm price movement
-- Catches skewed long/short ratios before you enter
+- Catches skewed long/short ratios and high funding rates
 
 **Fear & Greed Index**
 - Live market sentiment from alternative.me
@@ -62,41 +75,66 @@ Entry, Stop Loss, Take Profit — all calculated for you
 ## 📊 Sample Output
 
 ```
-═══════════════════════════════════════
-COIN: BTC/USDT | Price: $96,842
-═══════════════════════════════════════
-TIMEFRAMES:  15m: Bullish | 1hr: Bullish | 4hr: Neutral
-═══════════════════════════════════════
-🐋 WHALE ACTIVITY: Heavy Buying Detected
-🐋 Large buy wall at $95,000
-💰 FUNDING RATE: +0.012% (Longs paying — slight bearish)
-📊 OPEN INTEREST: Rising ✅
-⚖️  LONG/SHORT RATIO: 58% Long / 42% Short
-😱 MARKET SENTIMENT: Fear (32/100)
-📦 VOLUME: Confirming ✅
-═══════════════════════════════════════
-AI DECISIONS:
-GEMINI:    LONG  | 78% confidence
-DEEPSEEK:  LONG  | 82% confidence
-GROQ:      WAIT  | 55% confidence
-═══════════════════════════════════════
-FINAL DECISION: LONG ✅✅
-OVERALL CONFIDENCE: 73%
-RISK LEVEL: MEDIUM
-───────────────────────────────────────
-ENTRY:      $96,500
-STOP LOSS:  $95,200
-TARGET 1:   $98,000
-TARGET 2:   $100,500
-RISK/REWARD RATIO: 1:2.3
-───────────────────────────────────────
-REASONING:
-Gemini:    Strong bullish structure on 1hr. Whale accumulation supports move.
-DeepSeek:  RSI not overbought. MACD crossover confirmed. High confidence long.
-Groq:      Mixed signals on 4hr. Suggest waiting for confirmation.
-═══════════════════════════════════════
-⚠️  WARNING: High funding rate — market may be overleveraged
-═══════════════════════════════════════
+💰 Enter your account balance (USDT): 500
+
+Enter a crypto pair (e.g. BTC/USDT) or 'exit': btc
+Fetching data for BTCUSDT...
+Analyzing with AI Models...
+
+═══════════════════════════════════
+  🐋 WHALEWHISPERER — BTCUSDT
+  Price: $80,497 | Risk: MEDIUM
+═══════════════════════════════════
+  📊 TREND
+  15m: Bullish | 1hr: Bullish | 4hr: Bearish
+
+  🐋 WHALES: Neutral
+  😱 SENTIMENT: Fear (38/100)
+  💰 FUNDING: +0.0018% (Normal)
+  📦 VOLUME: Not Confirming ⚠️
+  ⚖️ LONGS vs SHORTS: 44% / 56%
+═══════════════════════════════════
+  🤖 AI VOTES
+  Gemini:   SHORT 70%  ✅
+  DeepSeek: Unavailable ❌
+  Groq:     SHORT 70%  ✅
+═══════════════════════════════════
+  📢 FINAL: SHORT ✅✅
+  Confidence: 70%
+───────────────────────────────────
+  ENTRY:     $80,497
+  STOP LOSS: $82,107  🔴
+  TARGET 1:  $78,887  🟢
+  TARGET 2:  $77,277  🟢
+  R/R RATIO: 1:2.1
+  ⏱ EST. DURATION: Unclear — monitor closely ⚠️
+───────────────────────────────────
+  ⚡ LEVERAGE GUIDE  (Balance: $500)
+
+  Lev  │ Liq Price │ Loss if SL  │ Profit TP1  │ Profit TP2  │ Risk
+  ─────┼───────────┼─────────────┼─────────────┼─────────────┼──────────
+  3x   │ $83,130   │ -$25  (5%)  │ +$25  (5%)  │ +$50  (10%) │ 🟢 Safe
+  5x   │ $84,472   │ -$42  (8%)  │ +$42  (8%)  │ +$83  (17%) │ 🟡 Low
+  10x  │ $88,447   │ -$85  (17%) │ +$85  (17%) │ +$170 (34%) │ 🟠 Medium
+  15x  │ $85,831   │ -$127 (25%) │ +$127 (25%) │ +$255 (51%) │ 🔴 High
+  20x  │ $84,722   │ -$170 (34%) │ +$170 (34%) │ +$340 (68%) │ 🔴 Very High
+  25x  │ $83,697   │ -$212 (42%) │ +$212 (42%) │ +$425 (85%) │ 💀 Extreme
+  30x  │ $83,180   │ -$255 (51%) │ +$255 (51%) │ +$510 (102%)│ 💀 Danger
+
+  💡 SUGGESTED: 3x — 5x (Final decision is yours)
+───────────────────────────────────
+  💬 WHY?
+  Gemini:   Short-term overbought conditions lack volume confirmation against a bearish 4hr trend.
+  DeepSeek: Unavailable ❌
+  Groq:     Bearish 4hr structure with fear sentiment and high RSI suggests potential reversal.
+═══════════════════════════════════
+  ⚠️ WARNINGS
+  - Volume not confirming move
+═══════════════════════════════════
+  💡 SUMMARY: 2/3 AIs say SHORT. Low volume — consider waiting.
+═══════════════════════════════════
+
+Analyze another coin? (yes/no):
 ```
 
 ---
@@ -136,6 +174,8 @@ GROQ_API_KEY=your_groq_key_here
 ```bash
 python crypto_bot.py
 ```
+
+When the bot starts, it will ask for your account balance once. After that, just type any coin and get your analysis!
 
 ---
 
