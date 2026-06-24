@@ -54,10 +54,25 @@ def calculate_signals(df: pd.DataFrame) -> pd.DataFrame:
     volume_mult[df['volume'] > 1.5 * df['vol_sma']] = 1.5
     df['final_score'] = df['base_score'] * volume_mult
     
-    # 7. Final Decision (Score >= 4 -> LONG, Score <= -4 -> SHORT, Else -> NEUTRAL)
+    # 6b. Market Regime Detection (BULL/BEAR based on SMA 200)
+    regime = np.array(['BEAR'] * len(df), dtype=object)
+    if 'sma_200' in df.columns:
+        regime[(df['close'] > df['sma_200']) & df['sma_200'].notna()] = 'BULL'
+    df['regime'] = regime
+    
+    # 7. Final Decision (Regime-based)
     signal = np.array(['NEUTRAL'] * len(df), dtype=object)
-    signal[df['final_score'] >= 4] = 'LONG'
-    signal[df['final_score'] <= -4] = 'SHORT'
+    
+    # BULL Mode (Tighter neutral zone: >= 4 or <= -4)
+    bull_mask = df['regime'] == 'BULL'
+    signal[bull_mask & (df['final_score'] >= 4)] = 'LONG'
+    signal[bull_mask & (df['final_score'] <= -4)] = 'SHORT'
+    
+    # BEAR Mode (As-is settings: >= 5 or <= -5)
+    bear_mask = df['regime'] == 'BEAR'
+    signal[bear_mask & (df['final_score'] >= 5)] = 'LONG'
+    signal[bear_mask & (df['final_score'] <= -5)] = 'SHORT'
+    
     df['signal'] = signal
     
     return df
@@ -69,6 +84,32 @@ def generate_signal(df: pd.DataFrame) -> dict:
     df_signals = calculate_signals(df)
     latest = df_signals.iloc[-1]
     
+    # Calculate dynamic SL/TP levels based on ATR and Market Regime
+    sig = latest['signal']
+    close_val = latest['close']
+    atr_val = latest.get('atr', 0.0)
+    regime_val = latest.get('regime', 'BEAR')
+    
+    sl_val = 0.0
+    tp_val = 0.0
+    
+    if regime_val == 'BULL':
+        # Wider TP (4.0x ATR), relaxed SL (2.0x ATR)
+        if sig == 'LONG':
+            sl_val = close_val - 2.0 * atr_val
+            tp_val = close_val + 4.0 * atr_val
+        elif sig == 'SHORT':
+            sl_val = close_val + 2.0 * atr_val
+            tp_val = close_val - 4.0 * atr_val
+    else:
+        # BEAR mode (as-is: 3.0x ATR TP, 1.5x ATR SL)
+        if sig == 'LONG':
+            sl_val = close_val - 1.5 * atr_val
+            tp_val = close_val + 3.0 * atr_val
+        elif sig == 'SHORT':
+            sl_val = close_val + 1.5 * atr_val
+            tp_val = close_val - 3.0 * atr_val
+        
     return {
         'timestamp': latest['timestamp'],
         'close': latest['close'],
@@ -80,6 +121,10 @@ def generate_signal(df: pd.DataFrame) -> dict:
         'base_score': latest['base_score'],
         'final_score': latest['final_score'],
         'signal': latest['signal'],
+        'regime': regime_val,
+        'atr': atr_val,
+        'sl': sl_val,
+        'tp': tp_val,
         'indicators': {
             'rsi': latest['rsi'],
             'macd_hist': latest['macd_hist'],

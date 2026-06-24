@@ -46,9 +46,15 @@ def display_signal(sig_info, symbol, timeframe):
         sig_icon = "⚖️ NEUTRAL"
 
     # 1. Main Signal Panel
+    regime = sig_info.get('regime', 'BEAR')
+    regime_color = "green" if regime == 'BULL' else "red"
+    regime_emoji = "🐂" if regime == 'BULL' else "🐻"
+    
     signal_text = Text()
     signal_text.append(f"Pair: {symbol} ({timeframe})\n", style="bold white")
-    signal_text.append(f"Price: ${sig_info['close']:,.2f}\n\n", style="white")
+    signal_text.append(f"Price: ${sig_info['close']:,.2f}\n", style="white")
+    signal_text.append(f"Regime: ", style="bold white")
+    signal_text.append(f"{regime_emoji} {regime} Mode\n\n", style=f"bold {regime_color}")
     signal_text.append(f"SIGNAL: ", style="bold white")
     signal_text.append(f"{sig_icon}\n", style=sig_color)
     signal_text.append(f"Final Score: {sig_info['final_score']:+g}", style="bold cyan")
@@ -103,16 +109,51 @@ def display_signal(sig_info, symbol, timeframe):
     
     # Final Score
     table.add_section()
-    table.add_row("[bold]Final Score[/bold]", "", f"[bold {sig_color.split()[-1]}]{sig_info['final_score']:+g}[/bold]")
+    table.add_row("[bold]Final Score[/bold]", "", f"[{sig_color}]{sig_info['final_score']:+g}[/]")
     
     console.print(table)
+    
+    # 2b. Trade Setup Card (only for active LONG/SHORT signals)
+    if sig_info['signal'] in ['LONG', 'SHORT']:
+        setup_text = Text()
+        action = "BUY (LONG)" if sig_info['signal'] == 'LONG' else "SELL (SHORT)"
+        action_style = "bold green" if sig_info['signal'] == 'LONG' else "bold red"
+        regime_val = sig_info.get('regime', 'BEAR')
+        
+        tp_mult = "4.0x" if regime_val == 'BULL' else "3.0x"
+        sl_mult = "2.0x" if regime_val == 'BULL' else "1.5x"
+        rr_ratio = "1:2.0"  # Always 1:2 ratio
+        
+        setup_text.append("Action:          ", style="bold white")
+        setup_text.append(f"{action}\n", style=action_style)
+        
+        setup_text.append("Optimal Entry:   ", style="bold white")
+        setup_text.append(f"${sig_info['close']:,.2f}\n", style="bold cyan")
+        
+        setup_text.append("Take Profit (TP):", style="bold white")
+        setup_text.append(f"${sig_info['tp']:,.2f}", style="bold green")
+        setup_text.append(f" ({tp_mult} ATR target)\n", style="dim")
+        
+        setup_text.append("Stop Loss (SL):  ", style="bold white")
+        setup_text.append(f"${sig_info['sl']:,.2f}", style="bold red")
+        setup_text.append(f" ({sl_mult} ATR protection)\n\n", style="dim")
+        
+        setup_text.append("Risk/Reward:     ", style="bold white")
+        setup_text.append(f"{rr_ratio} ({regime_val} Mode Adjusted)", style="bold yellow")
+        
+        console.print(Panel(
+            setup_text,
+            title="[bold green]🎯 ACTIVE TRADE SETUP[/bold green]" if sig_info['signal'] == 'LONG' else "[bold red]🎯 ACTIVE TRADE SETUP[/bold red]",
+            border_style="green" if sig_info['signal'] == 'LONG' else "red",
+            expand=False
+        )),
 
 def main():
     display_welcome()
     
     while True:
-        # Prompt for coin
-        symbol_input = Prompt.ask("\n[bold green]Enter crypto pair[/bold green] (e.g. BTC, ETH/USDT, SOL)", default="BTC")
+        # Prompt for coin (SOL removed from defaults/examples)
+        symbol_input = Prompt.ask("\n[bold green]Enter crypto pair[/bold green] (e.g. BTC, ETH/USDT, ADA)", default="BTC")
         symbol = normalize_symbol(symbol_input)
         
         # Prompt for timeframe
@@ -125,8 +166,8 @@ def main():
         # Fetching & Calculation Spinner
         with console.status(f"[bold yellow]Fetching live data and running indicators for {symbol}...[/bold yellow]"):
             try:
-                # Fetch 100 candles to compute indicators
-                df = fetch_ohlcv(symbol, timeframe=timeframe, limit=100)
+                # Fetch 300 candles to ensure enough history for SMA 200
+                df = fetch_ohlcv(symbol, timeframe=timeframe, limit=300)
                 if df.empty or len(df) < 50:
                     console.print(f"[bold red]Error:[/bold red] Could not fetch sufficient data for {symbol}.")
                     continue
@@ -144,12 +185,12 @@ def main():
         display_signal(sig_info, symbol, timeframe)
         
         # LLM Explanation Spinner
-        with console.status("[bold magenta]Requesting AI explanation from Groq...[/bold magenta]"):
+        with console.status("[bold magenta]Requesting AI explanation from Gemini...[/bold magenta]"):
             explanation = get_explanation(symbol, timeframe, sig_info['signal'], sig_info['final_score'], sig_info['indicators'])
             
         console.print(Panel(
-            explanation,
-            title="[bold magenta]🤖 AI WHISPER (Llama-3)[/bold magenta]",
+            Text(explanation),
+            title="[bold magenta]🤖 AI WHISPER (Gemini 2.5 Flash)[/bold magenta]",
             border_style="magenta",
             expand=False
         ))

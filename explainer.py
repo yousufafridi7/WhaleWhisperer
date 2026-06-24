@@ -1,6 +1,7 @@
 import os
 import sys
-from groq import Groq
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from cache import ExplanationCache
 
@@ -12,14 +13,14 @@ except AttributeError:
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Module level cache instance (5 minutes TTL)
 explanation_cache = ExplanationCache(ttl_seconds=300)
 
 def get_explanation(symbol: str, timeframe: str, signal: str, score: float, indicators: dict) -> str:
     """
-    Generates a 2-3 line explanation for the signal using Groq API.
+    Generates a 2-3 line explanation for the signal using Gemini 2.5 Flash.
     Caches the explanation to avoid redundant API calls.
     """
     # 1. Check cache first
@@ -28,8 +29,8 @@ def get_explanation(symbol: str, timeframe: str, signal: str, score: float, indi
         return cached
 
     # 2. Check API Key
-    if not GROQ_API_KEY:
-        return "LLM Explanation unavailable: GROQ_API_KEY not set in .env file."
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+        return "LLM Explanation unavailable: GEMINI_API_KEY not set in .env file."
 
     # 3. Format compact inputs
     rsi = round(indicators.get('rsi', 50.0), 1)
@@ -55,33 +56,27 @@ def get_explanation(symbol: str, timeframe: str, signal: str, score: float, indi
     )
 
     try:
-        client = Groq(api_key=GROQ_API_KEY)
+        client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # Call Groq API
-        chat_completion = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a quant trading analyst. Explain the rule-based signal in 2 to 3 lines. Be direct, professional, and focus only on the provided technicals. Do not give financial advice or warning disclaimers."
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt
-                }
-            ],
-            temperature=0.2,
-            max_tokens=150
+        # Call Gemini API
+        response = client.models.generate_content(
+            model="gemini-1.5-pro",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction="You are a quant trading analyst. Explain the rule-based signal in 2 to 3 lines. Be direct, professional, and focus only on the provided technicals. Do not give financial advice or warning disclaimers.",
+                temperature=0.2,
+                max_output_tokens=1000,
+            ),
         )
         
-        explanation = chat_completion.choices[0].message.content.strip()
+        explanation = response.text.strip()
         
         # Save to cache
         explanation_cache.set(symbol, timeframe, signal, explanation)
         
         return explanation
     except Exception as e:
-        return f"Error fetching explanation from Groq: {e}"
+        return f"Error fetching explanation from Gemini: {e}"
 
 if __name__ == "__main__":
     # Test script for Phase 5 verification

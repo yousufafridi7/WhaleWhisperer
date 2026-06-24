@@ -80,6 +80,12 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         
     df['sqz_mom'] = value.rolling(window=n).apply(get_lr_value, raw=True)
     
+    # 7. ATR (Average True Range) - 14 period (Wilder's smoothing)
+    df['atr'] = tr.ewm(alpha=1/14, adjust=False).mean()
+    
+    # 8. SMA 200 for Market Regime Detector
+    df['sma_200'] = df['close'].rolling(window=200).mean()
+    
     return df
 
 if __name__ == "__main__":
@@ -91,7 +97,7 @@ if __name__ == "__main__":
         df_ind = add_indicators(df)
         
         print("\nLast 5 rows showing all indicator columns:")
-        cols_to_print = ['timestamp', 'close', 'ema_9', 'ema_21', 'rsi', 'macd', 'macd_hist', 'bb_upper', 'bb_lower', 'sqz_mom', 'sqz_on', 'vol_sma']
+        cols_to_print = ['timestamp', 'close', 'ema_9', 'ema_21', 'rsi', 'macd', 'macd_hist', 'bb_upper', 'bb_lower', 'sqz_mom', 'sqz_on', 'vol_sma', 'atr']
         print(df_ind[cols_to_print].tail(5))
         print("\nAll indicators successfully computed!")
     except Exception as e:

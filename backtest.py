@@ -16,28 +16,42 @@ class WhaleWhispererStrategy(Strategy):
     Backtesting.py strategy implementing the rule-based signals of Phase 3.
     """
     def init(self):
-        # Cache the signal column for speed
-        self.signal = self.data.signal
+        pass
 
     def next(self):
-        sig = self.signal[-1]
+        sig = self.data.signal[-1]
+        close = self.data.Close[-1]
+        atr = self.data.atr[-1]
+        regime = self.data.regime[-1]
         
+        # Determine dynamic SL and TP multipliers based on market regime
+        if regime == 'BULL':
+            sl_mult = 2.0
+            tp_mult = 4.0
+        else:
+            sl_mult = 1.5
+            tp_mult = 3.0
+            
         # Position execution based on rules
         if sig == 'LONG':
             # Close short position if open
             if self.position.is_short:
                 self.position.close()
-            # Open long position using 95% of equity
+            # Open long position using 95% of equity with dynamic SL/TP
             if not self.position.is_long:
-                self.buy(size=0.95)
+                sl_price = close - sl_mult * atr
+                tp_price = close + tp_mult * atr
+                self.buy(size=0.95, sl=sl_price, tp=tp_price)
                 
         elif sig == 'SHORT':
             # Close long position if open
             if self.position.is_long:
                 self.position.close()
-            # Open short position using 95% of equity
+            # Open short position using 95% of equity with dynamic SL/TP
             if not self.position.is_short:
-                self.sell(size=0.95)
+                sl_price = close + sl_mult * atr
+                tp_price = close - tp_mult * atr
+                self.sell(size=0.95, sl=sl_price, tp=tp_price)
 
 def run_backtest_report(symbol: str = "BTC/USDT", timeframe: str = "1h", since_days: int = 180):
     """
@@ -71,16 +85,20 @@ def run_backtest_report(symbol: str = "BTC/USDT", timeframe: str = "1h", since_d
     df_backtest.set_index('timestamp', inplace=True)
     df_backtest.index = pd.to_datetime(df_backtest.index)
     
-    # Run Backtest (Default cash: $10,000, commission: 0.04% - typical Binance futures fee)
+    # Run Backtest (Default cash: $1,000,000 to support high-priced assets like BTC, commission: 0.04% - typical Binance futures fee)
     bt = Backtest(
         df_backtest, 
         WhaleWhispererStrategy, 
-        cash=10000, 
+        cash=1000000, 
         commission=0.0004,
         exclusive_orders=True
     )
     
     stats = bt.run()
+    
+    # Handle NaN win rate gracefully
+    win_rate = stats['Win Rate [%]']
+    win_rate_str = f"{win_rate:.2f}%" if not pd.isna(win_rate) else "0.00%"
     
     print("\n" + "="*40)
     print(f" 🐋 BACKTEST REPORT: {symbol} ({timeframe})")
@@ -91,7 +109,7 @@ def run_backtest_report(symbol: str = "BTC/USDT", timeframe: str = "1h", since_d
     print(f"  Buy & Hold Return:  {stats['Buy & Hold Return [%]']:.2f}%")
     print(f"  Max Drawdown:       {stats['Max. Drawdown [%]']:.2f}%")
     print(f"  Total Trades:       {int(stats['# Trades'])}")
-    print(f"  Win Rate:           {stats['Win Rate [%]']:.2f}%")
+    print(f"  Win Rate:           {win_rate_str}")
     print(f"  Sharpe Ratio:       {stats['Sharpe Ratio']:.2f}")
     print("="*40 + "\n")
     
